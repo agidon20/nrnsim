@@ -1,0 +1,48 @@
+
+
+D__SCALEBARHOC = 1
+/**
+**/
+begintemplate TScalebar
+    public graph,_tscale_bar_
+    objref graph
+	strdef xlabel,ylabel
+
+    proc init(){
+        graph = $o1
+        show($2,$3)
+    }
+
+    obfunc show(){local xscale, yscale
+        xscale = $1
+        yscale = $2
+		sprint(ylabel,"%.2e mV", yscale)
+		sprint(xlabel,"%.2e ms", xscale)
+        graph_left = graph.size(1)
+        graph_bottom = graph.size(3) 
+        graph.xaxis(3)
+        graph.yaxis(3)
+        graph.xaxis(graph_left, graph_left + xscale, graph_bottom, 0, 0, 0, 0)
+        graph.yaxis(graph_bottom, graph_bottom + yscale, graph_left, 0, 0, 0, 0)
+		//not sure why but positioning labels does not work. So just put it at the top.
+		graph.label(xlabel)
+		graph.label(ylabel)
+        return graph
+    }
+
+endtemplate TScalebar
+
+objref _global_tscale_bar_
+
+proc append_scale_bar(){localobj sb, NULL
+	if(_global_tscale_bar_ == NULL){
+		_global_tscale_bar_ = new List()
+	}
+	if(numarg() == 3){
+		$o1.exec_menu("View = plot")
+	}else{
+		if($4 != 0) $o1.exec_menu("View = plot")
+	}
+	sb = new TScalebar($o1,$2,$3)
+	_global_tscale_bar_.append(sb)
+}

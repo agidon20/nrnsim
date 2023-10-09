@@ -1,0 +1,357 @@
+	if(unix_mac_pc() == 3) nrn_load_dll("./_mod/nrnmech.dll")
+	load_file("nrngui.hoc")
+	load_file("./nrnlib/_classlib/TScalebar.hoc")
+
+    /*
+    * parameters
+    *******************************************************    
+    */
+	Ni = 2 //input layer
+	N = 5  //network cells
+    steps_per_ms = 100
+	dt = 1/steps_per_ms
+	tstop = 1000
+    BASE_RANDOM_SEED = 1232
+    objref NULL
+
+    /*
+    * First set all the functions with general purpose; i.e., the utility functions:
+    *******************************************************    
+    */
+
+    obfunc append_dynamic_clamp(){localobj dc
+        dc = new SEClamp(0.5)
+        dc.dur1 = tstop
+        dc.rs = 1e-2//0.001
+        $o1.append(dc)
+        return dc
+    }
+
+    obfunc append_post_syn(){localobj s
+        s = new mySyn(0.5)
+        s.gmax = 5e-3 //uS
+        s.tau_r = 0.5
+        s.tau_d = 10
+        s.mg = 0
+        s.e = 0		
+        $o1.append(s)
+        return s
+    }
+    
+    proc append_recurrent_netcon(){local threshold localobj nc, target
+        target = $o2
+        threshold = 0
+        //section netcon = new NetCon(&v(x), target, threshold, delay, weight)
+        nc = new NetCon(&v(0.5),target,threshold,2,1e-3)
+        $o1.append(nc)
+    }
+    
+    proc biophys(){
+        celsius = 37
+        cm =1
+        Ra =100
+        Rm = 40
+        //remove the passive properties from soma and axon
+        insert traub
+        gNabar_traub = 0.1 
+        gKbar_traub = 0.015 
+        gLbar_traub =  1/Rm/1000  	
+        eL_traub = -74.0 		
+        eK_traub = -70			
+        eNa_traub = 40		
+    }
+
+    objref global_random_obj
+
+    obfunc get_random_obj(){
+        if(global_random_obj == NULL){
+            global_random_obj = new Random(BASE_RANDOM_SEED)
+            print "Allocating new random object"
+        }
+        return global_random_obj
+    }
+
+    obfunc create_tplay(){local x,i,Hz,delay localobj tplay,rnd
+        Hz = $1
+        delay = $2
+        rnd = get_random_obj()
+        //assign four times the nuber of extepcted spike per second to be safe
+        tplay = new Vector(Hz * 1000 / tstop/2 ) 
+        rnd.negexp(1/Hz * 1000)
+        tplay.setrand(rnd)
+        tplay.integral().add(delay)
+        return tplay
+    }
+
+
+    proc block_net_synapses(){
+      //  s.gmax
+      //  for i=0,N-1 
+    }
+    /*
+    * Create the cells and synapses
+    *******************************************************
+    */
+	create soma[N]
+    for i=0,N-1 soma[i] biophys(i) 
+
+	objref syn_list //each syn list belongs to the post synaptic neuron
+   	syn_list = new List() //one synapse on each postsynaptic neuron represents multiple synaptic inputs
+    //do the following for every cell in the recurrent layer:
+	//for every post synaptic neuron append N synapses
+	for i=0,N-1 soma[i] append_post_syn(syn_list) 
+	
+    /*
+    * load data for connectivity and connect the network
+    *******************************************************
+    */
+
+    //connectivity of the input layer to the recurrent layer
+	// the connectivity in the recurrent layer is all to all
+	objref input_layer_connectivity_file
+	objref input_layer_connectivity_mat
+	input_layer_connectivity_mat = new Matrix()
+	input_layer_connectivity_file = new File("./dat/input_layer_connectivity.dat")
+	input_layer_connectivity_file.ropen()
+	input_layer_connectivity_mat.scanf(input_layer_connectivity_file, N, N)
+	
+	
+	objref recurrent_connectivity_file
+	objref recurrent_connectivity_mat
+	recurrent_connectivity_mat = new Matrix()
+	recurrent_connectivity_file = new File("./dat/recurrent_layer_connectivity.dat")
+	recurrent_connectivity_file.ropen()
+	recurrent_connectivity_mat.scanf(recurrent_connectivity_file, N, N)
+	
+	
+	
+	//The time of activation of each of the 
+	// stimulations to the input layer. Every input
+	// synapse (i.e., the netstim) trigggers a single input or less
+	// at the recurrent layer.
+	objref activity_file
+	objref activity_vec
+	activity_vec = new Vector()
+	activity_file = new File("./dat/input_layer_activity.dat")
+	activity_file.ropen()
+	activity_vec.scanf(activity_file, N)
+		
+    /*
+    * connect the network 
+    *******************************************************
+    */
+    
+    objref recurrent_connection_list[N] //each bouton list belongs to teh presynaptic inputs neuron
+	for i=0,N-1 recurrent_connection_list[i] = new List()
+	// connect every ith presynaptic neuron with the synapse on the jth postsynaptic neuron
+	for i=0,N-1	for j=0,N-1 soma[i] append_recurrent_netcon(recurrent_connection_list[i],syn_list.o(j))
+	//set the weight of the i-->j synapse
+    //connection is essentially all to all... not as below.
+	//for i=0,N-1	for j=0,N-1 recurrent_connection_list[i].o(j).weight = recurrent_connectivity_mat.getval(i,j) * 5e-3 //set in nS
+
+    proc set_net_synapses(){local block
+        block = ($1 == -1)
+        if (block){
+           	for i=0,N-1	syn_list.o(i).gmax = 0
+        }else{
+            for i=0,N-1	syn_list.o(i).gmax = 5e-3
+        }
+    }
+
+    /*
+    * cerate the input layer
+    *******************************************************
+    */
+
+	//input layer create input to all neurons and use matrix to set the wieghts
+	objref input_syn_list[Ni] //one input for each cell.
+	objref syn,tplay_inputs[Ni][N]
+	for i=0, Ni-1{//presynaptic input cell
+        input_syn_list[i] = new List()
+		for j=0, N-1 soma[j]{//post synaptic cell
+            syn = append_post_syn(input_syn_list[i])
+			tplay_inputs[i][j] = create_tplay(100,200)
+			syn.play( tplay_inputs[i][j] )
+		}
+	}
+
+    //negative is to remove the input and positive is to add it back
+    func set_input_layer(){local input_cell
+        input_cell = $1
+        if(input_cell == 0) return 0
+        if(input_cell < 0){
+            input_cell = (-1)*input_cell - 1
+            for i=0, N-1 input_syn_list[input_cell].o(i).remove_play()
+        }else{
+            input_cell = input_cell - 1
+            for i=0, N-1 input_syn_list[input_cell].o(i).play( tplay_inputs[input_cell][i] )
+		}
+        return input_cell
+    }
+
+   
+    /*
+    * functions to run the simulation in three steps.
+    * step0 (record) just run and record voltage and synaptic currents
+    * step1 (replay+input) set the voltage clamp and use it to replay the previous traces.
+    * step1a (replay-input) replay but without activating the input nodes
+    *******************************************************
+    */
+    STEPS = 4
+    OBSERVED_CELL = 4
+	objref vclamp_recordings[N]
+	objref vsoma_recordings[N]
+    objref input_syn_recordings[Ni]
+    objref net_syn_recordings[N]
+    
+  	objref list_vsoma_recordings[STEPS]
+	objref list_vclamp_recordings[STEPS]
+    objref list_input_syn_recordings[STEPS]
+    objref list_net_syn_recordings[STEPS]
+    objref vsoma_replay[N]
+	objref dynamic_clamp
+
+
+    
+
+    proc init_recordings(){
+        for i=0,STEPS-1 list_vsoma_recordings[i] = new List()
+        for i=0,STEPS-1 list_vclamp_recordings[i] = new List()
+        for i=0,STEPS-1 list_input_syn_recordings[i] = new List()
+        for i=0,STEPS-1 list_net_syn_recordings[i] = new List()
+
+        dynamic_clamp = new List()
+
+        for i=0,N-1 vclamp_recordings[i] = new Vector()
+        for i=0,N-1 vsoma_recordings[i] = new Vector()	
+        for i=0,N-1 net_syn_recordings[i] = new Vector()	
+        
+        // only the inputs for a single cell.
+        for i=0,Ni-1 input_syn_recordings[i] = new Vector()	
+    }
+
+
+    proc append_vector_to_lists(){local step
+        step = $1
+        for i=0,N-1 list_vclamp_recordings[step].append(vclamp_recordings[i].c)
+        for i=0,N-1 list_vsoma_recordings[step].append(vsoma_recordings[i].c)
+        for j=0,Ni-1 list_input_syn_recordings[step].append(input_syn_recordings[j].c)
+        for i=0,N-1 list_net_syn_recordings[step].append(net_syn_recordings[i].c)
+    }
+	
+    proc step0(){
+        //oth step: as step 0 in the thought experiment
+        for j=0,Ni-1 input_syn_recordings[j].record(&input_syn_list[j].o(OBSERVED_CELL).i)
+        for i=0,N-1 vsoma_recordings[i].record(&soma[i].v(0.5),dt)
+        for i=0,N-1 net_syn_recordings[i].record(&syn_list.o(i).i,dt)
+        //no voltage clamp at this step
+        run()
+        append_vector_to_lists(0)
+    }
+
+    proc step1(){localobj dc
+        //first step: replay the activity with the inputs turned on
+        for i=0,N-1 {
+            soma[i] dc = append_dynamic_clamp(dynamic_clamp)
+            vsoma_replay[i] = vsoma_recordings[i].c
+            vsoma_replay[i].play(&dc.amp1,dt) // replay recorded activity to the dynamic_clamp
+            vclamp_recordings[i].record(&dc.i,dt) // record the current generated by the dynamic_clamp during the replay.
+        }
+        run()
+        append_vector_to_lists(1)
+
+    }
+
+    proc step1a(){
+        //still first step: remove the inputs and record again
+        set_input_layer(-2)
+        set_input_layer(-1)
+        run()
+        append_vector_to_lists(2)
+    }
+
+
+    proc step2(){
+        set_net_synapses(-1)
+        set_input_layer(2)
+        set_input_layer(1)
+        run()
+        append_vector_to_lists(3)        
+    }
+
+    proc run_all(){
+        init_recordings()
+        step0()
+        step1()
+        step1a()
+        step2()
+    }
+	
+	
+	/*
+    * plot
+    *******************************************************
+    */
+
+	proc plot_results(){localobj graph
+		graph = $o1
+		graph = new Graph(0)
+		graph.label($s2)
+		for i=0,$o3.count-1 $o3.o(i).line(graph,dt,i+1,1)
+		graph.view(0, 1, 0, 1, 100, 500, 500,100)
+		append_scale_bar(graph,$4,$5)
+	}
+
+	objref graph_recorded_activity
+	objref graph_replayed_activity
+    objref graph_network_synaptic_activity
+    objref graph_recorded_replayed_diff,diff
+	objref graph_all_steps,plot_all_steps
+
+    objref graph_plot_all_steps_net_syns,plot_all_steps_net_syns
+
+
+    proc plot_all(){
+        plot_results(graph_recorded_activity,"recorded activity",list_vsoma_recordings[0],100,10)
+        plot_results(graph_replayed_activity,"replayed activity + inputs",list_vsoma_recordings[1],100,10)
+        for i=0,N-1 list_vsoma_recordings[1].o(i).sub(list_vsoma_recordings[0].o(i))
+        plot_results(graph_recorded_replayed_diff,"voltage diff",list_vsoma_recordings[1],100,10)
+
+
+       // plot_results(graph_network_synaptic_activity,"network syn activity", list_net_syn_recordings[3],100,10)
+
+        plot_all_steps = new List()
+        //the total current of the inputs
+        plot_all_steps.append(list_input_syn_recordings[0].o(0).c.add(list_input_syn_recordings[0].o(1)))
+        // the current injected by the voltage clamp when the input to the network is ON
+        plot_all_steps.append(list_vclamp_recordings[1].o(OBSERVED_CELL))
+        // the current injected by the voltage clamp when the input to the network is OFF
+        plot_all_steps.append(list_vclamp_recordings[2].o(OBSERVED_CELL))
+        // get the voltage clamp now with inputs and with blocked synapses.
+        plot_all_steps.append(list_vclamp_recordings[3].o(OBSERVED_CELL))
+        plot_all_steps.append(list_net_syn_recordings[0].o(OBSERVED_CELL))
+        plot_results(graph_all_steps,"first recorded stim",plot_all_steps,100,0.5)
+
+
+
+        plot_all_steps_net_syns = new List()
+        plot_all_steps_net_syns.append(list_net_syn_recordings[0].o(OBSERVED_CELL))
+        plot_all_steps_net_syns.append(list_net_syn_recordings[1].o(OBSERVED_CELL))        
+        plot_all_steps_net_syns.append(list_net_syn_recordings[2].o(OBSERVED_CELL))        
+        plot_all_steps_net_syns.append(list_net_syn_recordings[3].o(OBSERVED_CELL))
+
+        plot_results(graph_plot_all_steps_net_syns,"net syn",plot_all_steps_net_syns,100,0.5)
+   
+    }
+
+
+	/*
+    * finally, get things going
+    *******************************************************
+    */
+
+
+    run_all()
+    plot_all()
+    
+	
