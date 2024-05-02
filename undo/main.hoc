@@ -1,0 +1,447 @@
+// Load necessary modules
+load_file("nrngui.hoc")
+nrn_load_dll("../nrnlib/_mod/nrnmech.dll")
+load_file("../nrnlib/_classlib/TColorMap.hoc")
+load_file("../nrnlib/_classlib/TRaster.hoc")
+// Define simulation parameters
+N = 40
+SIM_ITERATIONS = 30000
+BASE_RANDOM_SEED = 123123
+FEEDFORWARD_RATE = 40
+FEEDFORWARD_DELAY = 20
+P_RELEASE = 0.8
+P_CONNECTION_IN_IN = 0.4
+P_CONNECTION_IN_EX = 0.8
+P_CONNECTION_EX_IN = 0.8
+P_CONNECTION_EX_EX = 0.3
+LEARNING_RATE = 0.05
+IE_RATIO = 0.6666
+TYPE_EX = 4
+TYPE_IN = 0
+
+CORR_BIN_SIZE = 3.0 //ms
+
+objref NULL
+
+
+objref syn_feedforward[N]
+objref tplay_inputs[N]
+
+double ie_type[N]
+objref spike_counter[N]
+objref initial_spike_counter[N]
+objref spike_counter2[N]
+objref spike_counter2_vec[N]
+//objref correlation_sum
+
+
+objref syn_feedback[N][N]
+objref tplay_output[N][N]
+objref netcon[N][N]
+
+double release[N][N]
+double weights[N][N]
+double corr[N][N]
+
+objref global_random_obj
+
+
+create grid[N][N] //for plotting
+objref shapeWindow
+
+
+
+create cells[N]
+
+proc init_simul_prop(){
+    for i=0, N-1 for j=0, N-1 weights[i][j] = 1
+	for i=0, N-1 for j=0, N-1 corr[i][j] = 0
+
+    steps_per_ms = 10
+    tstop = 500      // Simulation duration (ms) several parameters depend on that so start with it.
+    last_spike_count_ex = 0
+    current_spike_count_ex = 0
+    last_spike_count_in = 0
+    current_spike_count_in = 0   
+    //screen_update_invl = 1
+}
+
+/*
+    Util function: just create a time series for synaptic activity
+*/
+obfunc create_tplay(){local x,i,Hz,delay localobj tplay,rnd
+	Hz = $1
+    delay = $2
+	rnd = get_random_obj()
+    //assign four times the nuber of extepcted spike per second to be safe
+    tplay = new Vector(Hz * 1000 / tstop * 4) 
+    rnd.negexp(1/Hz * 1000)
+    tplay.setrand(rnd)
+    tplay.integral().add(delay)
+    return tplay
+}
+
+
+/*
+    Util function: just create a time series for synaptic activity
+*/
+obfunc create_gauss_tplay(){local x,i,Hz,delay localobj tplay,rnd, bounded_tplay
+	Hz = $1
+    delay = $2
+	rnd = get_random_obj()
+    //assign four times the nuber of extepcted spike per second to be safe
+    tplay = new Vector(Hz * 1000 / tstop) 
+    rnd.normal(0,100) //inputs at 0 (and then add delay), with 100 ms of variance.
+    tplay.setrand(rnd)
+    tplay = tplay.integral().add(delay)
+    print "delay=",delay
+    //make sure that tplay values are bounded within the simulation time (i.e., no negative or positive)
+    bounded_tplay = new Vector()
+    bounded_tplay.where(tplay,"()",0,tstop)
+    return bounded_tplay
+}
+
+
+obfunc get_random_obj(){
+    if(global_random_obj == NULL){
+        global_random_obj = new Random(BASE_RANDOM_SEED)
+        print "Allocating new random object"
+    }
+    return global_random_obj
+}
+
+
+create grid
+objref grid_section_list
+objref grid_shape_plot
+objref grid_color_map
+proc init_plot_weights(){
+    grid grid_section_list = new SectionList()
+    grid_shape_plot = new PlotShape(grid_section_list)
+    
+    grid_color_map = new TColorMap("../nrnlib/_classlib/cm/jet.cm",grid_shape_plot) 
+    grid_shape_plot.scale(0,4)
+    for i=0,N-1 {
+        grid_shape_plot.hinton(&ie_type[i], i/N, -1/N, 1/N)
+        grid_shape_plot.hinton(&ie_type[i], -1/N, i/N, 1/N)
+        for j=0,N-1 {
+            if(syn_feedback[i][j] != NULL){
+                grid_shape_plot.hinton(&weights[i][j], i/N, j/N, 1/N)
+            }
+        }
+    }
+    grid_shape_plot.size(-.5, 1, 0, 1)
+    grid_shape_plot.exec_menu("Shape Plot")
+}
+
+
+create gridcorr
+objref corr_section_list
+objref corr_shape_plot
+objref corr_color_map
+proc init_plot_corr(){
+    gridcorr corr_section_list = new SectionList()
+    corr_shape_plot = new PlotShape(corr_section_list)
+    
+    corr_color_map = new TColorMap("../nrnlib/_classlib/cm/jet.cm",corr_shape_plot) 
+    corr_shape_plot.scale(-1,1)
+    for i=0,N-1 {
+        corr_shape_plot.hinton(&ie_type[i], i/N, -1/N, 1/N)
+        corr_shape_plot.hinton(&ie_type[i], -1/N, i/N, 1/N)
+        for j=0,N-1 {
+            if(syn_feedback[i][j] != NULL){
+                corr_shape_plot.hinton(&corr[i][j], i/N, j/N, 1/N)
+            }
+        }
+    }
+    corr_shape_plot.size(-.5, 1, 0, 1)
+    corr_shape_plot.exec_menu("Shape Plot")
+}
+
+
+/*
+    Here I create a network of 4 neurons, two excitatory and two inhibitory.
+    The inhibitory and the excitatory neurons can fire APs 
+*/
+proc init_cells_biophys(){
+    for i=0,N-1 cells[i] {
+        // Passive properties
+        Ra = 100      // Axial resistance (ohm*cm)
+        cm = 1        // Membrane capacitance (uF/cm^2)
+        L = 10        // Length (um)
+        diam = 10     // Diameter (um)
+        nseg = 1      // Number of segments
+        // Initialize to resting potential
+        v = -65       // Membrane potential (mV)
+        insert traub  // Passive current
+        
+		spike_counter[i] = new APCount(0.5)
+        spike_counter[i].thresh = -10
+		spike_counter2[i] = new APCount(0.5)
+        spike_counter2[i].thresh = -10
+		spike_counter2_vec[i] = new Vector()
+		spike_counter2[i].record(spike_counter2_vec[i])
+        initial_spike_counter[i] = new APCount(0.5)
+        initial_spike_counter[i].thresh = -10
+    }
+}
+
+proc init_ie_type(){localobj rnd
+    rnd = get_random_obj()
+    rnd.uniform(0,1)    
+    for i=0, N-1{
+        ie_type[i] = 4*(rnd.repick() < IE_RATIO)
+    }
+    
+}
+
+/*every cell has inputs coomming from the outside world. 
+It is a feedforward connection. Only the excitatory neurons
+recieve this input and they try to play a gain where theylearn to 
+inhibit one another to get minimal input*/
+objref ff_syn_list[N]
+proc init_feedforward(){localobj syn
+	ff_syn_list = new List()
+    for i=0, N-1 if(ie_type[i] == TYPE_EX) cells[i]{
+        syn = new mySyn(0.5) //put the synapse on the post cell.
+        syn.gmax = 0.1e-3 //uS
+        syn.tau_r = 0.5
+        syn.tau_d = 20
+        syn.mg = 0
+        syn.e = 0
+        //tplay_inputs[i] = create_tplay(FEEDFORWARD_RATE,FEEDFORWARD_DELAY)
+         //divide the synapses to three groups, will work in 100,200 and 300 ms
+        tplay_inputs[i] = create_gauss_tplay(FEEDFORWARD_RATE,FEEDFORWARD_DELAY + 100 + (i%3)*100 )
+        syn.play( tplay_inputs[i])
+        syn_feedforward[i] = syn
+		ff_syn_list[i] = tplay_inputs[i]
+    }
+}
+
+proc set_synaptic_release(){local i,j localobj rnd
+    rnd = get_random_obj()
+    rnd.uniform(0,1)
+    for i=0, N-1{
+        for j=0, N-1{
+            release[i][j] = (rnd.repick() < P_RELEASE)
+        }
+    }
+}
+
+proc set_synaptic_conductance(){local i,j localobj syn
+    //presynaptic neuron i 
+    for i=0, N-1 {
+        for j=0, N-1{
+            syn = syn_feedback[i][j]
+            if(syn != NULL){
+                if(ie_type[i] == TYPE_EX) syn.gmax = 0.05e-3*release[i][j]*weights[i][j] //uS
+                if(ie_type[i] == TYPE_IN) syn.gmax = 0.5e-3*release[i][j]*weights[i][j] //uS                
+            }
+        }
+    }
+}
+
+proc learn(){local i,j,dW,success,fail,weights_sum,ws,sim_itaration localobj rnd
+    //if spikes became smaller, then change the synaptic weights.
+    success = last_spike_count_ex - current_spike_count_ex
+    dW = 2*(success > 0) - 1
+    dW = LEARNING_RATE * dW
+    sim_itaration = $1
+    LEARNING_RATE = 0.05
+    if(sim_itaration>1000) LEARNING_RATE = 0.01
+    //LEARNING_RATE = 0.05*exp(-sim_itaration/500) + 0.005 //detay of learning rate
+    weights_sum = 0
+    for i=0, N-1{
+        for j=0, N-1{
+            if(syn_feedback[i][j] != NULL){
+                fail = 1 - release[i][j] 
+                weights[i][j] += ( dW * release[i][j]   )//only the syanpses that were active will get stronger.
+                if(weights[i][j]<0) weights[i][j] = 0
+                if(weights[i][j]>4) weights[i][j] = 4
+                weights_sum += weights[i][j]
+                //weights[i][j] -= ( dW * fail   )
+            }
+        }
+    }
+    //normalization
+    ws = 0
+    for i=0, N-1 for j=0, N-1  if(syn_feedback[i][j] != NULL) weights[i][j] *=   initial_weight_sum/weights_sum
+    for i=0, N-1 for j=0, N-1  if(syn_feedback[i][j] != NULL) ws += weights[i][j] 
+    print "current weights sum is:", ws, " and learning rate:", LEARNING_RATE
+}
+
+proc init_feedback(){local i,j,i_to_j_connected localobj syn,connection_probability
+    connection_probability = get_random_obj()
+    connection_probability.uniform(0,1)
+    //presynaptic neuron i 
+    for i=0, N-1 cells[i]{
+        //post synaptic input j
+        for j=0, N-1{
+            if (i != j){
+               // if( ie_type[i] == TYPE_EX || ie_type[j] == TYPE_EX){ //no IN to IN connections
+                    if(ie_type[i] == TYPE_EX && ie_type[j] == TYPE_EX) i_to_j_connected = ( connection_probability.repick() < P_CONNECTION_EX_EX )
+                    if(ie_type[i] == TYPE_IN && ie_type[j] == TYPE_EX) i_to_j_connected = ( connection_probability.repick() < P_CONNECTION_IN_EX )
+                    if(ie_type[i] == TYPE_EX && ie_type[j] == TYPE_IN) i_to_j_connected = ( connection_probability.repick() < P_CONNECTION_EX_IN )
+                    if(ie_type[i] == TYPE_IN && ie_type[j] == TYPE_IN) i_to_j_connected = ( connection_probability.repick() < P_CONNECTION_IN_IN )
+
+                    if(i_to_j_connected){
+                        cells[j] syn = new mySyn(0.5) //put the synapse on the post cell j.
+                        syn.gmax = 0
+                        syn.tau_r = 0.5
+                        syn.tau_d = 5
+                        syn.mg = 0
+                        if(ie_type[i] == TYPE_EX) syn.e = 0
+                        if(ie_type[i] == TYPE_IN) syn.e = -80
+                        // Neuron cannot synapse onto itself, that synapse is used for the stim input
+                        netcon[i][j] = new NetCon(&cells[i].v(0.5), syn, 0, 1, 1)
+                        syn_feedback[i][j] = syn
+                    }
+               // }
+            }else{
+                weights[i][j] = -1e10
+            }
+        }
+    }
+    initial_weight_sum = 0
+    for i=0, N-1 for j=0, N-1 {
+        if(syn_feedback[i][j] != NULL){
+            initial_weight_sum += weights[i][j]
+        }
+    }
+}
+
+
+// objref g_corr
+// proc init_plot_corr(){
+    // correlation_sum  = new Vector(SIM_ITERATIONS + 2,0)
+	// g_corr = new Graph()
+	// correlation_sum.plot(g_corr,3,1)
+	// g_corr.exec_menu("View = plot")
+// }
+
+
+
+
+objref g,gs, gs_vec_ex,gs_vec_in
+objref raster, initial_raster
+strdef s
+
+proc count_spikes(){local i
+    last_spike_count_in = current_spike_count_in
+    last_spike_count_ex = current_spike_count_ex
+    current_spike_count_in = 0
+    current_spike_count_ex = 0
+    for i=0,N-1 if(ie_type[i] == TYPE_EX) current_spike_count_ex+=spike_counter[i].n
+    for i=0,N-1 if(ie_type[i] == TYPE_IN) current_spike_count_in+=spike_counter[i].n
+    print "Excitatory spikes " , current_spike_count_ex , " spikes"
+    print "Inhibitory spikes " , current_spike_count_in , " spikes"
+    gs_vec_ex.x[$1] = current_spike_count_ex
+    gs_vec_in.x[$1] = current_spike_count_in	
+}
+
+
+
+proc init_plot_voltage(){local i
+    raster = new TRaster()
+    initial_raster = new TRaster(raster)
+    gs_vec_ex  = new Vector(SIM_ITERATIONS + 2,0)
+    gs_vec_in  = new Vector(SIM_ITERATIONS + 2,0)
+    newPlotV()
+    g = graphItem   
+    for i=0, N-1 {
+        sprint(s,"retios[%d].v(0.5)",i)
+        cells[i] g.addvar(s, &v(0.5), 2+ (ie_type[i] == TYPE_EX),1)
+    }
+    for i=0, N-1 if(ie_type[i] == TYPE_EX) raster.append(spike_counter[i],3,10)
+    for i=0, N-1 if(ie_type[i] == TYPE_EX) initial_raster.append(initial_spike_counter[i],5,6)
+    for i=0, N-1 if(ie_type[i] == TYPE_IN) raster.append(spike_counter[i],2,10)
+    for i=0, N-1 if(ie_type[i] == TYPE_IN) initial_raster.append(initial_spike_counter[i],5,6)    
+    gs = new Graph()
+    gs_vec_in.plot(gs,2,1)
+    gs_vec_ex.plot(gs,3,1)
+    gs.exec_menu("View = plot")
+    raster.setview(tstop)
+}
+
+func spikes_corr_coef_sum() {local corr_ij,k localobj celli, cellj, binaryi, binaryj,corrvec
+	k = corr_ij = 0
+	binaryi = new Vector( tstop / CORR_BIN_SIZE + 1, 0)
+	binaryj = new Vector( tstop / CORR_BIN_SIZE + 1, 0)	
+	corrvec = new Vector()
+	for j=0, N-1 if(ie_type[j] == TYPE_EX){
+        for i=0, N-1 if(ie_type[i] == TYPE_EX){
+			celli = ff_syn_list[i]
+			cellj = spike_counter2_vec[j]
+			binaryi.fill(0)
+			binaryj.fill(0)	
+			for k = 0, celli.size-1 {
+				if(celli.x[k] > tstop / CORR_BIN_SIZE) break
+				binaryi.x[int(celli.x[k]/CORR_BIN_SIZE)] = 1
+			}
+			for k = 0, cellj.size-1 binaryj.x[int(cellj.x[k]/CORR_BIN_SIZE)] = 1
+			var_i = binaryi.var()
+			var_j = binaryj.var()
+			if(var_i == 0|| var_j == 0) {
+				corr[i][j] = 0	
+			}else{
+				mean_i = binaryi.mean()
+				mean_j = binaryj.mean()
+				binaryi.sub(mean_i)
+				binaryj.sub(mean_j)
+				cov_ij = binaryi.mul(binaryj).mean()
+				corr[i][j] = cov_ij / sqrt(var_i * var_j)
+				
+			}
+			corr_ij += corr[i][j]
+			k=k+1
+		}
+    }
+	print "mean corr=",corr_ij/k
+	return cov_ij
+}
+
+proc update_plots(){
+        gs.flush()
+        raster.erase()
+        raster.show()
+        initial_raster.show()
+        grid_shape_plot.flush()
+		corr_shape_plot.flush()
+}
+
+// Graphs for displaying voltage
+proc do(){local sim_itaration,total_itarations
+    total_itarations = $1
+    for sim_itaration=0,total_itarations{
+        set_synaptic_release()
+        set_synaptic_conductance()
+        run()
+        count_spikes(sim_itaration)
+		spikes_corr_coef_sum()
+        learn(sim_itaration)
+        update_plots()
+        doNotify()
+        if(sim_itaration % 100 == 0) savefile()
+    }
+}
+
+xopen("save.hoc") //it requires some of the definitions above, so it has to be just before main function
+
+proc main(){
+    init_simul_prop()
+    init_cells_biophys()
+    init_ie_type()
+    init_feedforward()
+    init_feedback()
+    init_plot_weights()
+	init_plot_corr()
+    init_plot_voltage()
+    run()
+    initial_raster.fix()
+    count_spikes(SIM_ITERATIONS)
+    //readfile()
+	update_plots()
+    do(SIM_ITERATIONS)
+    savefile()
+}
+main()

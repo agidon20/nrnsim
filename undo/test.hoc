@@ -1,0 +1,11 @@
+proc do(){local jj
+    for jj=0,10000{
+        set_synaptic_release()
+        set_synaptic_conductance()
+        run()
+        count_spikes()
+        learn()
+        update_plots(jj)
+        doNotify()
+    }
+}

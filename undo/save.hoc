@@ -1,0 +1,112 @@
+
+double tmp[N]
+strdef sim_properties
+proc savefile(){localobj file,file_ie_type, file_release, file_weights, file_corr
+    sim_properties = "//simulation data, use load_file function to set parameters"
+
+    sprint (sim_properties,"\n\r%s%s = %f", sim_properties, "N",N )
+    sprint (sim_properties,"\n\r%s%s = %f", sim_properties, "BASE_RANDOM_SEED",BASE_RANDOM_SEED )
+    sprint (sim_properties,"\n\r%s%s = %f", sim_properties, "FEEDFORWARD_RATE",FEEDFORWARD_RATE )
+    sprint (sim_properties,"\n\r%s%s = %f", sim_properties, "FEEDFORWARD_DELAY",FEEDFORWARD_DELAY )
+    sprint (sim_properties,"\n\r%s%s = %f", sim_properties, "P_RELEASE",P_RELEASE )
+    sprint (sim_properties,"\n\r%s%s = %f", sim_properties, "P_CONNECTION_IN_IN",P_CONNECTION_IN_IN)
+    sprint (sim_properties,"\n\r%s%s = %f", sim_properties, "P_CONNECTION_IN_EX",P_CONNECTION_IN_EX)
+    sprint (sim_properties,"\n\r%s%s = %f", sim_properties, "P_CONNECTION_EX_IN",P_CONNECTION_EX_IN)
+    sprint (sim_properties,"\n\r%s%s = %f", sim_properties, "P_CONNECTION_EX_EX",P_CONNECTION_EX_EX)
+    sprint (sim_properties,"\n\r%s%s = %f", sim_properties, "LEARNING_RATE",LEARNING_RATE )
+    sprint (sim_properties,"\n\r%s%s = %f", sim_properties, "IE_RATIO",IE_RATIO )
+    sprint (sim_properties,"\n\r%s%s = %f", sim_properties, "TYPE_EX",TYPE_EX )
+    sprint (sim_properties,"\n\r%s%s = %f", sim_properties, "TYPE_IN",TYPE_IN )
+    file = new File("data/sim_properties.hoc")
+    file.wopen()
+    file.printf(sim_properties)
+    file.close()    
+
+    file_ie_type = new File()
+    file_release = new File()
+    file_weights = new File()
+	file_corr = new File()
+	
+
+    file_ie_type.wopen("data/ie_type.dat")
+    file_release.wopen("data/release.dat")
+    file_weights.wopen("data/weights.dat")
+	file_weights.wopen("data/corr.dat")
+	file_corr.wopen("data/correlation_sum.dat")
+	
+    file_ie_type.vwrite(N,&ie_type)
+    file_ie_type.flush()
+	
+
+    for i=0, N-1 {
+        for j=0, N-1{
+            k = release[i][j]
+            file_release.vwrite(&k)
+            file_release.flush()
+            k = weights[i][j]
+            file_weights.vwrite(&k)
+            file_weights.flush()
+			k = corr[i][j]
+			file_corr.vwrite(&k)
+			file_corr.flush()
+        }
+    }
+    file_ie_type.close()
+    file_release.close()
+    file_weights.close()
+	file_corr.close()
+
+    file = new File("data/gs_vec_ex.dat")
+    file.wopen()
+    gs_vec_ex.vwrite(file)
+    file.close()
+
+
+	file = new File("data/gs_vec_in.dat")
+    file.wopen()
+    gs_vec_in.vwrite(file)
+    file.close()
+}
+
+proc readfile(){localobj file,file_ie_type, file_release, file_weights, file_corr
+    xopen("data/sim_properties.hoc")
+
+    file_ie_type = new File()
+    file_release = new File()
+    file_weights = new File()
+	file_corr = new File()
+	
+    file_ie_type.ropen("data/ie_type.dat")
+    file_release.ropen("data/release.dat")
+    file_weights.ropen("data/weights.dat")
+	file_corr.ropen("data/correlation_sum.dat")
+
+    file_ie_type.vread(N,&ie_type)
+
+    for i=0, N-1 {
+        for j=0, N-1{
+            file_release.vread(&k)
+            release[i][j] = k
+            file_weights.vread(&k)
+            weights[i][j] = k
+            file_corr.vread(&k)
+            corr[i][j] = k			
+        }
+    }
+    file_ie_type.close()
+    file_release.close()
+    file_weights.close()
+    file_corr.close()
+
+    file = new File("data/gs_vec_ex.dat")
+    file.ropen()
+    gs_vec_ex.vread(file)
+    file.close()
+
+    file = new File("data/gs_vec_in.dat")
+    file.ropen()
+    gs_vec_in.vread(file)
+    file.close()
+	
+}
+
