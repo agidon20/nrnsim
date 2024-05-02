@@ -1,0 +1,50 @@
+D__TMOERRHOC = 1
+
+begintemplate TMOErr
+	objref S
+	public append,clear,dom,S,o
+	/**
+	* $oi - append error vectors
+	* note that the error objects are not modified here so it is safe 
+	* to use pointers to the real objects
+	*/
+	
+	proc init(){local i
+		DOMINATED = 0
+		NONE_DOMINATED = 1
+		S = new List()
+	}
+	
+	proc append(){local i
+		for i=1,numarg() S.append($oi)
+	}
+	
+	func dom(){local x,i,y,j localobj u0,u1
+		u0 = S.o($1) 
+		objectives = u0.size
+		for i=0,S.count-1{
+			u1 = S.o(i)
+			x = y = 1
+			//first, check if they are identical (hence y == 1) - if so, u0 is non-dominated
+			for j=0,objectives-1  y = y * (u0.x[j] == u1.x[j])
+			//secon	d, check if u0 > u1 at least in one objective (hence x == 1), if so, u is non-dominated by v.
+			for j=0,objectives-1  {
+				
+				x = x * (u0.x[j] >= u1.x[j])
+				//print "x=",x," y=",y,u0.x[j]," <= ",u1.x[j]
+			}
+			//this means that organism is dominated
+			if(x==1 && y==0) break
+		}
+		//return true of organism is dominated 
+		return x==1 && y==0
+
+	}
+	
+	obfunc o(){
+		return S.o($1)
+	}
+
+	//comfortable interface - instead of creating new object all the time, just clear it.
+	proc clear(){ S.remove_all()}
+endtemplate TMOErr

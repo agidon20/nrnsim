@@ -1,0 +1,22 @@
+
+load_file("TMOErr.hoc","D__TMOERRHOC")
+objref moe,a
+moe  = new TMOErr()
+a = new Vector()
+a.append(15.37201,1,4)
+moe.append(a.c)
+a = new Vector()
+a.append(15.37202,2,3 )
+moe.append(a.c)
+a = new Vector()
+a.append(15.372151,0,6)
+moe.append(a.c)
+a = new Vector()
+a.append(15.372707,3,6)
+moe.append(a.c)
+a = new Vector()
+a.append(15.739025,4,6)
+moe.append(a.c)
+
+for i=0,4 print moe.dom(i)
+

@@ -1,0 +1,475 @@
+D__TMOGA = 1
+load_file("TMOErr.hoc","D__TMOERRHOC")
+load_file("TString.hoc","D__TSTRINGHOC")
+load_file("TDiagn.hoc","D__TDIAGNHOC")
+
+
+//whenever a new best point (solution) is encountered rais this event
+proc IGANewElite(/*list_of_gnm,list_of_err*/){
+	diagn(D_LEVEL_ERROR,"proc IGANewElite","***GA ERROR: IGANewElite procedure is not overrided!","",NULL)
+}
+
+objref global_vec_ //vector to return the error from the error function becuase the error function is global
+begintemplate TMOGA
+
+		external IGANewElite,global_vec_
+		external D_LEVEL_ASSERT,NULL,diagn
+		
+		objref genome[1]		//genome of every organizm
+		objref tng_genome[1]	//tng = the next generation genomes
+		objref tos_genome[1]
+
+		objref error[1] 				//error matrix (organism i error is in error.getcol(i))
+		objref tos_error[1]
+		
+		objref range,rmin,rmax
+		objref params				//pointers to the parameters to optimize
+		objref rnd					//only one random gen, so there is only one seed
+		objref moe					//multi-objective-error object
+		objref this
+		objref pc					//parallelcontext
+		objref exec_list
+		objref flst,fparamlst
+		objref file
+		objref founders
+		objref elite			//a list of all the non-dominated organisms
+
+		strdef cmd
+		strdef resdir
+
+		public evolution,init_ga,assign,append,popsize,mutation_p,cross_p,append_founder,founders
+		public seed,tourn_size,append_err_func,pc,params,exec_list,output
+		public error,genome,tos_error,elite_error
+		public vwritegnm,vreadgnm,err_setup,endoftime,sigma_share
+		public descrete_mut,niche_fac,resdir,mutation_var
+
+
+		proc init(){
+
+			pc = new ParallelContext()
+			popsize = pc.nhost*2		//scale the population size with the number of processes available
+			mutation_p = 0.3 	//probability for each gene to undergo a mutation
+			cross_p = 0.3
+			tourn_size = 2	//size of the trournament -  see trournament function
+			mutation_var =0.1 //relative change a single gene undergo when mutation occures -deprecated
+			seed = 451		
+			pop_error = 1e80	//the minimal (among all orgs)  maximal (in the multi-objective error
+			ndsize = 0	//number of non-dominated orgs after each generation
+			esize = 0 	//number of elite organisms
+			endoftime = 1e80	//endless...
+			
+			sigma_share = 0 //this number should be revised acourding to the number
+					//of objective, enforcing variability and so on. zero means no sharing
+			niche_fac = 0
+			descrete_mut = 1 //if mutation is descrete mutation will go by 1/descrete_mut sequential steps
+			
+			resdir = "res" //default results directory
+
+			rmin = new Vector()
+			rmax = new Vector()
+			range = new Vector()
+			params = new List()
+			flst = new List()			
+			fparamlst = new List()
+			moe  = new TMOErr()
+			exec_list = new List()
+			file = new File()
+			elite = new Vector() // the best one
+			founders = new List()
+			NONE_DOMINATED = TRUE = 1
+			DOMINATED = FALSE = 0
+			
+			t_evolve = 0 
+			t_share = 0 
+			t_shuffle = 0
+			t_run = 0
+			t_elite = 0
+		}
+
+
+/*
+	add as many parameters as you like
+	$s1 - the optimized parameter name
+	$2 - its minimal value
+	$3 - maximal value
+*/
+		proc append(){
+			rmin.append($2)
+			rmax.append($3)
+			range.append($3-$2)
+			params.append(new Pointer($s1))
+			if(numarg()>3) exec_list.append(new TString($s4))
+		}
+
+
+/*
+	If more then one error function is required for each organizm then add them on the list.
+	currently each one of the organisms has identical set of functions. 
+	$s1 - error function name - only functions that were already declared.
+	$s2 - argument list in a string "arg1,arg2,arg3". Any argument is possible since the user 
+		is responsible for retrieving them.
+
+*/
+
+		proc append_err_func(){localobj s
+			if(name_declared($s1)){
+				flst.append(new TString($s1))
+				// parameters list look like "a,b,c"
+				// no error checking is done for now.
+				s = new TString("")
+				if(numarg()>1) s.append(",").append($s2) //the first comma is for the gemone id
+				fparamlst.append(s)
+
+			}else{
+				diagn(D_LEVEL_ASSERT,"func append_err_func","***GA ASSERT: you tried to add none existing function to the error function list","",NULL)
+			}
+		}
+
+
+/*
+	we allso need a "init_ga" for all the parameters that need to be set 
+	after "append" was used
+*/
+		proc init_ga(){local org,k
+			if(flst.count==0) diagn(D_LEVEL_ASSERT,"func init_ga","***GA ASSERT: at least one error function must be declared.","",NULL)
+			gc = params.count
+			objref genome[popsize],tng_genome[popsize],tos_genome[popsize]
+			objref tos_error[popsize],error[popsize]
+			rnd = new Random(seed)
+			rnd.uniform(0,1)
+			for org=0,popsize-1 genome[org] =  new Vector(gc)
+			for org=0,popsize-1 tng_genome[org] =  new Vector(gc)
+			for org=0,popsize-1 tos_genome[org] =  new Vector(gc)
+			
+			for org=0,popsize-1 genome[org].setrand(rnd)
+			
+			for org=0,popsize-1 tos_error[org] =  new Vector()
+			for org=0,popsize-1 error[org] =  new Vector()
+			
+			if ((k=founders.count)>popsize) k = popsize
+			for org=0,k-1 genome[org].copy(founders.o(org))
+			founders.remove_all()//free some memory
+		}
+/*
+	argument is a vector with genomes to be the founders.
+	IMPORTANT: the founders must be from fittings with similar genome size and ranges (and ofcourse meaning)
+*/
+		proc append_founder(){
+			founders.append($o1)
+		}
+
+		
+
+
+/*
+	$o1 - genome vector to assign to parameters
+*/
+		proc assign(){local gene localobj g 
+			g = $o1
+			for gene=0,gc-1 params.o(gene).val = g.x[gene]*range.x[gene] + rmin.x[gene]
+			for i=0,exec_list.count-1 {exec_list.o(i).exec()}//after all parameters were assigned
+		}
+
+
+/*
+	If the mutation go beyond the range, return the edges by 
+	the constraints function,first mutation is in probability
+	mutation_p^1 the second in mutation_p^2 and so on...
+	the gene to mutate is selected randomly
+	$1 - the organizm id to mutate
+*/
+		proc mutate(){local i,k,gene,mut,org
+			k=1 
+			org = $1 
+			for i=1,gc{
+				if(rnd.uniform(0,1)<mutation_p^k){
+					gene = int( rnd.uniform(0,gc) ) //select the gene to mutate
+					mut = 2*(rnd.uniform(0,1)>0.5) - 1
+					if(rnd.repick()>0.5) {
+						genome[org].x[gene] = (int(rnd.uniform(1,61)) - 0.5)/60
+					}else{
+						genome[org].x[gene] = (genome[org].x[gene] + mut/60)%1 //note that this is a double precision molulu
+					}
+					k+=1
+				}
+			}
+		}
+
+/*
+       n individuals are selected at random and for a tournament, 
+       the fittest one among the tournament are selected. The most common
+	   type of tournament selection is binary tournament selection, where 
+	   just two individuals are selected.
+       
+       Note that the tournament size is strongly linked to the objective_count, since 
+      the more objectives you have it is harder to be a non-dominated organism. 
+	   Here I use the rule that the tournament size is 3 times the number of the objectives.
+       this works fine with up to 8 objectives (test was caried out with random error values)
+       
+       Note that for too much objectives it begines to become a slow process O(n^2)
+
+*/
+		func tournament(){local i localobj org,ind
+			ind = new Vector(popsize)
+			org = new Vector(tourn_size)
+			rnd.uniform(0,1) 
+			ind = ind.setrand(rnd).sortindex()//this gives unique random integers
+			moe.clear
+			for(i=0;i<tourn_size;i+=1) moe.append(error[ind.x[i]])//note that tunament is called after sharing!
+			for(i=0;i<tourn_size;i+=1) org.x[i] = moe.dom(i)
+			return ind.x[org.min_ind] //send the population wise index of the non-dominated
+		}		
+
+
+
+/*
+	I treat the genome as if it was in a plasmid, then cut it somewhere randomely,
+	and then do the recombination. A linear genome rather then a plasmid
+	will cause two remote genes to be almost always ceperated buy the recombination e.g.:
+	the following genome A-B-C-D-E-F-G-H-I, every cross over will ceperate gene A from I.
+	The plasmid allows them to move on together in some of the times.
+	$1 genomes id of the child parents are selected form the tournament
+*/
+		proc recombinate(){local recom_spot,f,m,rot localobj father,mother,child
+			f = tournament() 
+			m = tournament()
+			recom_spot = int( rnd.uniform(0,gc-1) )+1//choose the spot for recombination
+			rot = int( rnd.uniform(-gc+1,gc-1) ) //set the genome to be circular - select rotation point
+			father = genome[f].c.rotate(rot).c(0,recom_spot-1) //cut the plasmid in a random spot
+			mother = genome[m].c.rotate(rot).c(recom_spot,gc-1)//cut the plasmid in a random spot
+			child = father.append(mother).rotate(-rot)//put it back to original form
+			tng_genome[$1].copy(child)
+		}
+/*
+	simplest sharing function
+	the error is multiplied by the niche count (a fitness is devided). Then for
+	normalization divide by the total niches count (this is just for perserving the magnitude
+	of the error).
+	sigma_share is set to 0.05 for now.
+	note the O(n^2) cost.
+*/
+			
+		proc share(){local j,i,niche_count,total_niche_count localobj g
+			if(sigma_share == 0) return
+			g = new Vector(gc)
+			niche_fac = 0
+			for(i=0;i<popsize;i+=1){
+				niche_count = 0
+				for(j=0;j<popsize;j+=1) {// note that single organism in a niche is still degrade the error by 1/popsize
+					d = g.copy(genome[i]).sub(genome[j]).mag/sigma_share
+					niche_count += (1-d)*(d<=1)
+				}
+				//note how this spoile the error -in the fitness case it is f/C but here the best i found is this...
+				error[i].mul(1 + niche_count/popsize)
+				niche_fac += niche_count
+			}
+			niche_fac = niche_fac/popsize/popsize //average niche for all organisms
+		}
+		
+
+
+
+/*
+	evolve is executed after getting the error and sorting the non-dominated list
+*/
+		proc evolve(){local i,k
+			for i=0,popsize-1	mutate(i) //in random gene
+			for i=0,popsize-1	if(rnd.uniform(0,1) < cross_p) recombinate(i)//to give birth to child i
+			for i=0,popsize-1	genome[i].copy(tng_genome[i]) //go to next generation
+		}
+
+		
+		proc elitism(){local i,all,x,y localobj e,es,g,gs,el,eli
+			e = new List()// list of new and old errors
+			g = new List() //list of old and new genomes
+			gs = new List()//list of new population of genomes but sorted
+			es = new List()//list of new population of errors but sorted
+			
+			all = popsize+esize
+			el = new Vector(20,1e80)
+			eli = new Vector(20,-1)
+			
+			//copy all the objects from tos and tng to a unified list
+	
+			for i=0,popsize-1 {g.append(genome[i]) e.append(error[i]) }
+			for i=0,esize-1 {g.append(tos_genome[i]) e.append(tos_error[i])}
+			
+			//here should build a function outside TMOGAcon object
+			for (i=0;i<all;i+=1){
+				x = e.o(i).x[1]-1
+				y = e.o(i).x[0]
+				if(x<20 && x>=0) if(el.x[x] > y) {el.x[x] = y eli.x[x] = i}
+			}
+			
+			esize = eli.where(">",-1).size //get the new amount of elites
+			for i=0,esize-1 es.append(e.o(eli.x[i]).c)// because we copy this back to genome
+			for i=0,esize-1 gs.append(g.o(eli.x[i]).c)// because we copy this back to genome
+			
+			for i=0,esize-1 tos_error[i].copy(es.o(i))
+			for i=0,esize-1 tos_genome[i].copy(gs.o(i))
+			
+
+		}
+		proc shuffle(){local po,i,all,tos_ndsize,x,y localobj nd,ndind,e,g,es,gs,el,eli
+			e = new List()// list of new and old errors
+			g = new List() //list of old and new genomes
+			gs = new List()//list of new population of genomes but sorted
+			es = new List()//list of new population of errors but sorted
+			tos_ndsize = ndsize
+			//note that it is important that while this is execute,
+			// all the slaves will ne idle.
+			nd = new Vector(popsize)
+			moe.clear
+			//copy all the objects from tos and tng to a unified list
+			for i=0,popsize-1 {g.append(genome[i]) e.append(error[i])  moe.append(error[i])}
+			for i=0,popsize-1 nd.x[i] = moe.dom(i)
+			ndind = nd.sortindex()
+			//sort them 
+			for i=0,esize-1{
+				gs.append(tos_genome[i].c)//note the use of copies and not pointers
+				es.append(tos_error[i].c)// because we copy this back to genome
+			}
+			
+			for i=0,popsize-1{
+				gs.append(g.o(ndind.x[i]).c)//note the use of copies and not pointers
+				es.append(e.o(ndind.x[i]).c)// because we copy this back to genome
+			}
+			 //set the new ndsize value the actual none dominated size for this and next generation
+			ndsize = nd.c.indvwhere("==",0).size // note that ndsize<=all
+			po = 0			
+			//the pareto optimal solutions are better if the average of the pareto optimum is bigger
+			for i=0, esize-1 po += es.o(i).sum/(esize)
+			// note that only the first popsize number of organizms are saved
+			// I didn't want to risk too many none-dominated organizms.
+			if(ndsize+esize>popsize) {
+				ndsize = popsize-esize
+				warn("WARNING: non-dominated + elite > population - there is degradation in pareto front\n")
+			}
+
+
+			for i=0,popsize-1 genome[i].copy(gs.o(i)) 
+			for i=0,popsize-1 error[i].copy(es.o(i)) 
+			
+			//something happend: (1) if the population pareto error was changed or (2) the number of non-dominated organisms
+			if(pop_error!=po){
+				pop_error = po
+				IGANewElite(gs,es,generations,esize,pop_error) 
+			}
+		}
+
+		
+
+	/* this is the first time an error vector is returned, therefore, I can 
+	setup all the error - essentialy their size*/
+
+		func err_setup(/*error*/){local org
+			objective_count = $1
+			for org=0,popsize-1 error[org].resize(objective_count)
+			for org=0,popsize-1 tos_error[org].resize(objective_count)
+			for org=0,popsize-1 tos_error[org].fill(1e80) //initial error is big here
+			return TRUE
+		}
+
+
+/*
+	actualy run the simulation (or whatever) and post the error.
+	peval is the parallel version of this function.
+	$o1 - genome vector, $2 - the number of the function from the error functino
+	list to use (flst)
+*/
+		func peval(){local key localobj vec
+			key = $3
+			assign($o1)
+			sprint(cmd,"global_vec_ = %s(%d%s)",flst.o($2).s,key,fparamlst.o($2).s)
+			execute(cmd) //execute global
+			pc.post(key,global_vec_)
+			return key
+		}
+		
+		
+/* evolution, where everything is wrapped */
+		proc evolution(){local id,l,j,i,err_setup_flag,org,key localobj e
+			init_ga()
+			if(numarg()>0) vreadgnm($s1)
+			pc.runworker() 
+			err_setup_flag = FALSE
+			for (generations=0;generations<endoftime;generations+=1){
+				startsw()
+				stopsw()
+				for (i=0;i<popsize;i+=1) {//in the first run elite_count = 0
+					error[i].fill(0) //make sure that the error is 0
+					for(j=0;j<flst.count;j+=1) pc.submit(this,"peval",genome[i],j,i) 
+				}
+				while((id=pc.working)>0) {
+					key = pc.retval
+					pc.take(key)
+					e = pc.upkvec
+					if(!err_setup_flag) err_setup_flag = err_setup(e.size)
+					error[key].add(e)
+				} t_run = stopsw()
+				
+				stopsw() elitism() t_elite = stopsw()
+				stopsw() share() t_share = stopsw()
+				stopsw() shuffle() t_shuffle = stopsw()
+				stopsw() evolve() t_evolve = stopsw()
+			 	
+				logfile(1)
+			}
+			pc.done
+		}
+		
+		
+		//---------------------------------------------------------------------------------------------------------------------------------
+		//from here on it is IO functions and debugging
+		proc logfile(){
+			sprint(cmd,"%s/log",resdir)
+			file.aopen(cmd)
+			file.printf("tng=%d, nd=%d, err=%f niche=%f\n",generations,ndsize,pop_error,niche_fac)
+			file.printf("run=%f, shuffle=%f, share=%f, evolve=%f elite=%f \n",t_run,t_shuffle,t_share,t_evolve,t_elite)
+			file.close()
+		}
+		
+		proc warn(){
+			sprint(cmd,"%s/warn",resdir)
+			file.aopen(cmd)
+			file.printf($s1)
+			file.close()
+		}
+		
+		proc output(){local i localobj gv,gnm
+			if(argtype(1)==0) gnm = genome[$1]
+			if(argtype(1)==1) gnm = $o1
+			gv = new Vector()
+			for i=0,gc-1 gv.append( gnm.x[i]*range.x[i] + rmin.x[i] )
+			if(numarg()<2) {
+				for i=0,params.count-1 printf("%s = %.25g\n", params.o(i).s, gv.x[i])
+				for i=0,exec_list.count-1 print exec_list.o(i).s
+			}else{
+				for i=0,params.count-1 $o2.printf("%s = %.25g\n",params.o(i).s, gv.x[i])
+				for i=0,exec_list.count-1 $o2.printf("%s\n",exec_list.o(i).s)//after all parameters were assigned
+			}
+		}
+		
+		proc vwritegnm(){local i localobj file,popgnm
+			file = new File($s1)
+			popgnm = new Vector()
+			popgnm.buffer_size(gc*popsize+1)
+			for i=0,popsize-1 popgnm.append(genome[i])
+			file.wopen()
+			popgnm.vwrite(file)
+			file.close()
+		}
+		
+		
+		proc vreadgnm(){local i localobj file,popgnm
+			file = new File($s1)
+			file.ropen()
+			popgnm = new Vector()
+			popgnm.vread(file)
+			for i=0,popsize-1 genome[i].copy(popgnm,i*gc,(i+1)*gc-1)
+			file.close()			
+		}
+
+		
+		
+endtemplate TMOGA

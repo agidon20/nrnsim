@@ -1,0 +1,54 @@
+D__TRASTERHOC = 1
+/**
+**/
+
+begintemplate TRaster
+    objref graster, spikey, spikes, spikes_color,spikes_size,apcs
+    public append,show, setview, graster, erase, fix
+    
+    proc init(){
+        spikes = new List()
+        spikes_color = new Vector()
+        spikes_size = new Vector()
+        apcs = new List()
+        if(numarg() > 0){
+            graster = $o1.graster //plot on a given raster
+        }else{
+            graster = new Graph(0)
+        }
+    }
+    proc append(){localobj vec,apcount
+        vec = new Vector()
+        apcount = $o1
+        apcs.append(apcount) //to remove recordings
+        apcount.record(vec)  // vec will record the firing times, no need to keep apcount after setting the recording
+        spikes.append(vec)  // add vec to the list of vectors that record firing times
+        spikes_color.append($2)
+        spikes_size.append($3)
+    }  
+
+    proc setview(){
+        tstop = $1
+        graster.size(0,tstop,0,spikes.count())
+        graster.view(0, 0, tstop, spikes.count(), 300, 105, 300.48, 200.32)
+    }
+
+    proc erase(){
+        graster.erase_all()
+    }
+
+    proc fix(){//remove the recording and fix the values of the of the vector
+        for i=0, spikes.count()-1  apcs.o(i).record()
+    }
+    
+    proc show() {local tstop localobj spikey
+        for i = 0,spikes.count()-1 {  // iterate over all cells
+            // number of elements in spikey must equal number of spikes fired by cell i
+            // value of each element must equal i+1
+            spikey = spikes.object(i).c
+            spikey.fill(i+1)
+            spikey.mark(graster, spikes.object(i), "|", spikes_size.x[i],spikes_color.x[i],2)
+        }
+    }
+
+endtemplate TRaster

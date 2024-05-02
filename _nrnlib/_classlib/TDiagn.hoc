@@ -1,0 +1,166 @@
+
+/**
+	Written by Albert Gidon 13/04/2007
+bbpwinsrv
+Template diagnostics has two main purposes:
+
+1) Error reporting (there is not much of handling here) do instead of just
+	printing the error, use diagn function to report it. Main reason for
+	this usage is to have one function that activate all types of reportings
+2) To run a full diagnostics in a single point in time. it is expensive process
+	in both computation and IO so it is very unlikely to use it every dt.
+
+ example for using (section 2):
+if you run simulation and the results are strange. stop the simulation at that point
+of time and then run full diagnostics.
+
+ This template is inspired by "Star Trek":
+When something goes wrong and the reason is unknown. The officer in charge asks for full
+diagnostics (or level X diagnostics) and recieve and answer like - 
+"all parameters are in normal range". Well, we want that too...
+ Microsoft started with this approach in (at least) Office 2007.
+
+*/
+
+
+D__TDIAGNHOC= 1 //name declared simular to the idea of " #define TDIAGN_H " in C.
+
+D_LEVEL_ASSERT = 0 // run immidialttely and stop
+D_LEVEL_ERROR = 1 //run emmidiately and stop -regular errors
+D_LEVEL_WARNING = 2 // run immidiately but continue with the program flow
+D_LEVEL_DIAGN = 4 // run with late diagnostics
+
+objref full_diagnostics_log,NULL
+full_diagnostics_log = new List()
+//it is the responsibility of the user to supply uniq id - hopefully to 
+// correct this in the future
+objref diagnostics_uid 
+diagnostics_uid = new Vector()
+
+
+begintemplate diagnostics
+	external full_diagnostics_log
+	external diagnostics_uid
+	strdef output,param,desc,stat
+	objref this,NULL
+	objref that //object that uses this diagnostics class
+	public run_diag, that,clean,verbose
+/**
+* The main pospuse of this class is to seperate the error handling from the 
+* rest of the code. to assert (stop
+*/
+	proc init(/*importance,param,desc,stat,that*/){
+		uid = 0
+		imp = $1//from 1 to 5
+		param = $s2 //parameter measured
+		desc = $s3 //description of the diagnostics
+		stat = $s4 //statment to run whenever diagnostics is called
+		that = $o5
+		global = 0 // flag  
+		if(that==NULL)	global = 1 //in the global scope
+		if(imp<3) run_diag(1)//run high importance diagnostics immidiately
+		if(imp<2) stop //assert
+		pos = full_diagnostics_log.append(this)
+	}
+
+/**
+* actualy run one diagnostics function from the user
+* if a parameter is used (any value) then verbouse is done
+*/
+	proc run_diag(/*verbose*/){
+		if(numarg()>0) {
+			print "Importance: ", imp
+			print "Parameter: ", param
+			if(global){
+				print "In global scope."
+			}else{
+				print "Source object: ", that
+			}
+			print "Description: ", desc
+			print "--------------------------------"
+		}
+		if(!execute1(stat,that)){//error
+			print "error in diagnostics statment", stat ," in object ",that
+		}
+		print "--------------------------------\n"
+	}
+/**
+*	clean the log but do not change the positions of the
+*	Diag object only if it is not referenced and it is in the globa
+*	scope
+*/
+	func clean(){local i
+		if(that == NULL && global == 0){
+			full_diagnostics_log.o(pos) == NULL
+			if(uid!=0){
+				i = diagnostics_uid.indwhere(uid)
+				diagnostics_uid.remove(i)
+			}
+			return 1 //1 means it was INDEED cleaned
+		}
+		return 0 //means NO cleaning was done
+	}
+	
+endtemplate diagnostics
+
+
+/**
+* the value of the parameter is not significant, if it is there
+* this function will verbose
+*/
+proc run_full_diagnostics(/*verbose*/){local i localobj NULL
+	for(i=0;i<full_diagnostics_log.count;i+=1){
+		if(!full_diagnostics_log.o(i).clean()){
+			full_diagnostics_log.o(i).run_diag($1)
+		}
+	}
+}
+
+/**
+* use the function form instread of creating new object all the time
+* Currently it is the user responsibitlity to enter uid in each function
+* if diagn is required to run once.
+*/
+proc diagn(/*importance,param,desc,stat,that[,run_once_id]*/){localobj d
+	if(numarg()>5 ){
+		//if the run_once_id exists do not run it again.
+		if(!diagnostics_uid.contains($6)) {
+			d = new diagnostics($1,$s2,$s3,$s4,$o5)
+			diagnostics_uid.append($6)
+		}
+	}else{
+		d = new diagnostics($1,$s2,$s3,$s4,$o5)
+	}
+}
+
+/*
+//Usage
+
+load_file("TDiagn.hoc")
+begintemplate foofoo
+	objref this
+	strdef desc
+	external diagn
+	proc init(){
+		desc = "diagnose the range of conductance for sodium"
+		diagn(1,"gna_bar",desc,"check()",this)
+	}
+	
+	proc check(){
+		print "all parameters are in normal range"
+	}
+endtemplate foofoo
+
+
+
+objref foo,NULL
+//diagnostics at the global scope
+diagn(1,"gna_bar","diagnose the range of conductance for sodium","print \"Bad! bad! bad!\"",NULL)
+//disgnostics at the object level
+foo = new foofoo()
+
+//actualy run the diagnostics verbosely
+run_full_diagnostics(1)
+
+*/
+//end

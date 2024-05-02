@@ -1,0 +1,77 @@
+
+external_range_var = 0
+begintemplate TTreeRangeVarPlot
+	objref x, y, seclist, q
+	strdef _range,cmd,mech_name
+	external external_range_var
+	public show,x,y,q
+
+	//root section is accessed here
+	proc init(){
+		distance()
+		x = new Vector()
+		y = new Vector()
+		q = new Vector()
+		_range = $s1
+		mech_name = $s2
+		seclist = $o3
+		color = 1
+		linewidth = 1
+		norm = 0	
+		dir = 1
+		if(numarg()>3) dir=$4			
+		if(numarg()>4) color=$5
+		if(numarg()>5) linewidth=$6
+		x.resize(0)
+		y.resize(0)
+		forsec seclist vectorize()
+
+
+	}
+
+
+	proc vectorize(){local xloc,xfrom,yfrom localobj p
+		xfrom = dir*distance(0)
+		yfrom = var(0)
+		p = new SectionRef()
+		
+		if(p.has_parent){//for nice connectivity of the plot use the parent values
+			p.parent{
+				if(ismembrane(mech_name)){
+					xfrom = dir*distance(1-0.5/nseg)
+					yfrom = var(1-0.5/nseg)
+				}
+			}
+		}
+		x.append(xfrom)
+		y.append(yfrom)
+		q.append(0)
+		
+		for(xloc,0){
+			x.append(dir*distance(xloc))
+			y.append(var(xloc))
+			q.append(1)
+		}
+	}
+
+
+	func var(){
+		sprint(cmd," external_range_var = %s.%s(%f)",secname(),_range,$1)
+		execute(cmd)
+		return external_range_var
+	}
+	
+	
+	proc show(){local i localobj g
+		g = $o1
+		if(numarg()>1) y.div($2)
+		for(i=0;i<x.size;i+=1){
+			if(q.x[i] == 0)	g.beginline(color,linewidth)
+			g.line(x.x[i],y.x[i])
+		}
+		if(numarg()>2) y.mark(g,x,"o",2,2,3)
+		g.flush()
+	}
+
+	
+endtemplate TTreeRangeVarPlot

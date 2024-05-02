@@ -1,0 +1,38 @@
+
+
+objref tpointlist_shape_
+strdef tpointlist_function_string
+strdef tpointlist_tmp_string
+proc plgen(){
+	tpointlist_generator()
+}
+proc tpointlist_generator(){
+	tpointlist_tmp_string = ""
+	tpointlist_function_string = "obfunc make_contacts(){localobj pl\n\t pl = new TPointList()\n"
+	tpointlist_shape_ = new Shape()
+	tpointlist_shape_.menu_tool("select points", "tpointlist_shape_mark")
+	tpointlist_shape_.exec_menu("select points")
+	tpointlist_shape_.menu_tool("write points", "","tpointlist_write_points()")
+	
+}
+
+proc tpointlist_shape_mark(){local d, a localobj p
+	if ($1 == 2) {
+	        tpointlist_shape_.color_all(1)
+	        d = tpointlist_shape_.nearest($2,$3) 
+	        a = tpointlist_shape_.push_selected()
+	        if (a >= 0) {
+	                tpointlist_shape_.select()
+	                p = new PointProcessMark(a)
+	                tpointlist_shape_.point_mark(p, 3)
+	                sprint(tpointlist_tmp_string,"%s\t%s pl.append(%g)\n",tpointlist_tmp_string, secname(), a)
+	                pop_section()
+	        }
+	}
+}
+
+proc tpointlist_write_points(){
+	 printf("\n%s%s%s",tpointlist_function_string,tpointlist_tmp_string,"\treturn pl\n}")
+}
+
+//just call tpointlist_generator() after loading your morphology

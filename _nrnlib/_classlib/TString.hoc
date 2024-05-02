@@ -1,0 +1,89 @@
+D__TSTRINGHOC = 1
+/**
+* Most basic string object
+*/
+begintemplate TString
+	strdef s,format
+	objref this
+	public s,append,insrt,c,exec,equal,fopen,cl
+	proc init(){local i,n
+		i = argtype(1)
+		n = numarg()
+		s = ""
+		format = "%s" //default for strdef or TString
+		if(i == 0) format = "%f" //default for numbers
+		if(n > 1) format = $s2 //user defined format
+		
+		if(i == 0) sprint(s,format,$1)
+		if(i == 1) sprint(s,format,$o1.s)
+		if(i == 2) sprint(s,format,$s1)
+	}
+	//The return value is 0 for numbers, 1 for objref, 
+	// 2 for strdef, and 3 for pointers for numbers
+	// append(strdef[,format])
+	// append(TString[,format])
+	// append(number[,format])
+	obfunc append(){local i,n
+		i = argtype(1)
+		n = numarg()
+		
+		format = "%s%s" //default for strdef or TString
+		if(i == 0) format = "%s%f" //default for numbers
+		if(n > 1) sprint(format,"%%s%s",$s2) //user defined format
+		
+		if(i == 0) sprint(s,format,s,$1)
+		if(i == 1) sprint(s,format,s,$o1.s)
+		if(i == 2) sprint(s,format,s,$s1)
+		return this
+	}
+	obfunc insrt(){local i
+		i = argtype(1)
+		if(i==0) {
+			sprint(format,"%s%%s",$s2)
+			sprint(s,format,$1,s)
+		}
+		if(i==1) sprint(s,"%s%s",$o1.s,s)
+		if(i==2) sprint(s,"%s%s",$s1,s)
+		return this
+	}
+	obfunc c(){localobj r
+		r = new TString(s)
+		return r
+	}
+	obfunc cl(){
+		s = ""
+		return this
+	}
+	
+	proc exec(){local ret
+		if(numarg()>0){
+			execute(s,$o1)
+		}else{
+			execute(s)
+		}
+	}
+	func equal(){local i
+		i = argtype(1)
+		if(i==0) return (strcmp(s,$s1)==0)
+		if(i==1) return (strcmp(s,$o1.s)==0)
+
+		
+	}
+	
+	obfunc fopen(){localobj file
+		file = new File(s)
+		if(numarg()>1){
+			if($1==1) file.wopen()
+			if($1==2) file.aopen()
+			if($1==3) file.ropen()
+			
+		}else{
+			file.wopen()
+		}
+		return file
+		
+	}
+	
+	
+	
+endtemplate TString
