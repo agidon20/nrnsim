@@ -1,6 +1,8 @@
 D__TPOINTLISTTHOC = 1
 //see help file in neuron extention help pages (wiki)
 // https://bbpteam.epfl.ch/wiki/index.php/NE:TPointList
+load_file("./_classlib/TString.hoc","D__TSTRINGHOC") // For TString class used in secname_() method
+
 
 begintemplate TPointList
 	public append,each_point,count,sclst,point,points,access_,mark,each_point_var
@@ -14,6 +16,7 @@ begintemplate TPointList
 		classname="TPointList"
 		sclst = new List()
 		sec_list = new SectionList()
+		tags = new List()
 		x = new Vector()
 		SPLIT = 0 //by default it will be only the local list
 		gid = -1 //by default points do not have to belong to the same cell.
@@ -21,30 +24,73 @@ begintemplate TPointList
 		if(numarg()>1) SPLIT = $2 //you will be able to set it to complete by the Manager objects
 
 	}
-
-	obfunc append(){local j localobj pl,sl
-		//need to push the currect sect, hopefully you are not one of them.ion into the section stack
-		if(numarg()==1){
-			if(argtype(1)==0){
-				x.append($1)
-				sclst.append(new SectionRef())
-			}else{
+	/**
+     * Unified append: Routes all logic to append_internal.
+     * Supports:
+     * 1. append(x) or append(x, "tag")
+     * 2. append(TPointList_Object)
+     * 3. append("secname", x) or append("secname", x, "tag")
+     */
+    obfunc append() { local j localobj sl
+        if (argtype(1) == 0) {
+            // Type 0 = Number (Standard append)
+            if (numarg() > 1) {
+                append_internal($1, $s2)
+            } else {
+                append_internal($1, "")
+            }
+            
+        }else {
+			if (argtype(1) == 1) {
+            // Type 1 = Object (Merge another TPointList)
 				sl = $o1.sclst
-				//this assumes that all sections exists
-				for j=0, sl.count - 1 {
-					sclst.append(sl.o(j))//we do not mind to reference the existing object
-					x.append($o1.x.x[j])
+				for j = 0, sl.count() - 1 {
+					// Shift context to the source section, then append
+					sl.o(j).sec append_internal($o1.x.x[j], $o1.tags.o(j).s) 
 				}
 			}
-			sec_list.append()
-		//python style address.
-		}else{
-			sprint(tmp,"%s {%s.append(%g) \n %s.sec_list.append()}",$s1,this,$2,this)
-			execute(tmp)
-			x.append($2)
 		}
-		return this //for chaning
-	}
+            
+        } else{
+			if (argtype(1) == 2) {
+            // Type 2 = String (Python-style string execution)
+            // Escaped quotes (\"%s\") allow us to pass the tag directly into the execute string
+				if (numarg() > 2) {
+					sprint(tmp, "%s { %s.append_internal(%g, \"%s\") }", $s1, this, $2, $s3)
+				} else {
+					sprint(tmp, "%s { %s.append_internal(%g, \"\") }", $s1, this, $2)
+				}
+				execute(tmp)
+			}
+        }
+        return this
+    }
+
+    /**
+     * Centralized Helper: Pushes the point, section reference, and tag into memory.
+     * Assumes the correct section is currently accessed.
+     */
+    proc append_internal() { localobj tstr
+        x.append($1)
+        sclst.append(new SectionRef())
+        sec_list.append() 
+        // Initialize TString with the passed tag string
+        tstr = new TString($s2)
+        tags.append(tstr)
+    }
+
+    /**
+     * find: returns a new TPointList containing points matching the tag.
+     */
+    obfunc find() { local i localobj result
+        result = new TPointList()
+        for i = 0, tags.count() - 1 {
+            if (strcmp(tags.o(i).s, $s1) == 0) {
+                sclst.o(i).sec result.append(x.x[i], tags.o(i).s)
+            }
+        }
+        return result
+    }
 
 	iterator each_point(){local i
 		for i=0, sclst.count-1{
