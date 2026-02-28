@@ -3,9 +3,10 @@ D__TPOINTLISTTHOC = 1
 // https://bbpteam.epfl.ch/wiki/index.php/NE:TPointList
 load_file("./_classlib/TString.hoc","D__TSTRINGHOC") // For TString class used in secname_() method
 
+
 begintemplate TPointList
 	public append,each_point,count,sclst,point,points,access_,mark,each_point_var
-	public setrand_distance
+	public setrand_distance, find
 	objref sclst,x,null,this,rnd,marklist,sl,NULL,sec_list, tags
 	strdef classname,tmp,style
 	public classname,loc,setrand,relocate,printf,total_l,x,mark1,filter_by_distance
@@ -34,15 +35,14 @@ begintemplate TPointList
 		//first deal with the tag
 		tag = new TString("")
 		if(numarg()>1) {
-			if(argtype(2) == 1) tag = new TString($s2)
-			if(argtype(2) == 2) tag = new TString($o2)
+			if(argtype(2) == 1) tag = new TString($o2)
+			if(argtype(2) == 2) tag = new TString($s2)
 		}
 		
 		// Type 0 = Number (Standard append)
         if (argtype(1) == 0) append_internal($1, tag)
 		// Type 1 = Object (Assume it's a TPointList to merge)
 		if (argtype(1) == 1) { 
-		// Type 1 = Object (Merge another TPointList)
 			sl = $o1.sclst
 			for j = 0, sl.count() - 1 {
 				// Shift context to the source section, then append
@@ -303,6 +303,8 @@ begintemplate TPointList
 	/*proc relocate(){
 		x.x[$1] = $2
 	}*/
+	
+
 	
 	iterator each_point_var(){local i
 		for i=0, sclst.count-1{

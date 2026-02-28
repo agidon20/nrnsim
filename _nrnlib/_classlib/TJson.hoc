@@ -1,0 +1,208 @@
+D__TJSONHOC = 1
+// ==============================================================================
+// 1. Primitive Wrappers
+// ==============================================================================
+
+begintemplate JString
+    public s
+    strdef s
+    proc init() { s = $s1 }
+endtemplate JString
+
+begintemplate JNumber
+    public v
+    proc init() { v = $1 }
+endtemplate JNumber
+
+// NEW: JVector Wrapper for true data isolation
+begintemplate JVector
+    public v
+    objref v
+    proc init() { 
+        // Create an independent deep copy of the passed Vector
+        v = $o1.c() 
+    }
+endtemplate JVector
+
+// ==============================================================================
+// 2. The JSON Dictionary Class
+// ==============================================================================
+
+begintemplate TJSON
+    public keys, values, set, get_num, get_str, get_vec, get_obj, save, load, print_all
+    objref keys, values, sf
+    
+    proc init() {
+        keys = new List()
+        values = new List()
+        sf = new StringFunctions()
+    }
+    
+    func index() { local i
+        for i=0, keys.count()-1 {
+            if (strcmp(keys.o(i).s, $s1) == 0) return i
+        }
+        return -1
+    }
+    
+    // --- SET ---
+    proc set() { local idx, atype localobj val_obj
+        strdef obj_name
+        idx = index($s1)
+        atype = argtype(2)
+        
+        if (atype == 0) {
+            val_obj = new JNumber($2)
+        } else if (atype == 2) {
+            val_obj = new JString($s2)
+        } else if (atype == 1) {
+            // Check if the object is a Vector
+            sprint(obj_name, "%s", $o2)
+            if (sf.substr(obj_name, "Vector") != -1) {
+                val_obj = new JVector($o2) // Wraps and isolates the Vector
+            } else {
+                val_obj = $o2 // Assume it's a nested JSON object or List
+            }
+        }
+        
+        if (idx == -1) {
+            keys.append(new JString($s1))
+            values.append(val_obj)
+        } else {
+            values.remove(idx)
+            values.insrt(idx, val_obj)
+        }
+    }
+    
+    // --- GETTERS ---
+    func get_num() { local idx localobj val
+        idx = index($s1)
+        if (idx == -1) { printf("JSON Error: Key '%s' not found.\n", $s1) return 0 }
+        val = values.o(idx)
+        return val.v
+    }
+    
+    proc get_str() { local idx localobj val
+        idx = index($s1)
+        if (idx == -1) { printf("JSON Error: Key '%s' not found.\n", $s1) return }
+        val = values.o(idx)
+        $s2 = val.s
+    }
+    
+    // NEW: Safe Vector Getter
+    objref _ret_vec
+    obfunc get_vec() { local idx localobj val
+        idx = index($s1)
+        if (idx == -1) { 
+            printf("JSON Error: Key '%s' not found.\n", $s1) 
+            _ret_vec = new Vector() 
+            return _ret_vec
+        }
+        val = values.o(idx)
+        // Return a COPY so the user can't accidentally alter the JSON's internal state
+        _ret_vec = val.v.c() 
+        return _ret_vec
+    }
+    
+    // Generic Object Getter (for nested JSONs)
+    objref _ret_obj
+    obfunc get_obj() { local idx
+        idx = index($s1)
+        if (idx == -1) { 
+            printf("JSON Error: Key '%s' not found.\n", $s1) 
+            _ret_obj = new List() 
+            return _ret_obj
+        }
+        return values.o(idx)
+    }
+    
+    // --- SAVE ---
+    proc save() { local i, j localobj f, val
+        f = new File($s1)
+        f.wopen()
+        f.printf("{\n")
+        
+        for i=0, keys.count()-1 {
+            val = values.o(i)
+            f.printf("  \"%s\": ", keys.o(i).s)
+            
+            strdef obj_name
+            sprint(obj_name, "%s", val)
+            
+            if (sf.substr(obj_name, "JNumber") != -1) {
+                f.printf("%g", val.v)
+            } else if (sf.substr(obj_name, "JString") != -1) {
+                f.printf("\"%s\"", val.s)
+            } else if (sf.substr(obj_name, "JVector") != -1) { // Check for JVector
+                f.printf("[\n")
+                for j=0, val.v.size()-1 {
+                    f.printf("    %g", val.v.x[j])
+                    if (j < val.v.size()-1) f.printf(",")
+                    f.printf("\n")
+                }
+                f.printf("  ]")
+            } else {
+                f.printf("\"[Nested %s]\"", obj_name)
+            }
+            
+            if (i < keys.count()-1) f.printf(",")
+            f.printf("\n")
+        }
+        f.printf("}\n")
+        f.close()
+    }
+    
+    // --- LOAD ---
+    proc load() { local num localobj f, vec
+        strdef line, key, valstr
+        f = new File($s1)
+        if (!f.ropen()) { printf("Cannot open %s\n", $s1) return }
+        
+        keys.remove_all()
+        values.remove_all()
+        
+        while (!f.eof()) {
+            f.gets(line)
+            
+            if (sf.substr(line, "\":") != -1) {
+                sf.head(line, "\":", key)
+                sf.right(key, sf.substr(key, "\"") + 1) 
+                
+                sf.right(line, sf.substr(line, ":") + 1)
+                
+                if (sf.substr(line, "[") != -1) {
+                    vec = new Vector()
+                    while (!f.eof()) {
+                        f.gets(line)
+                        if (sf.substr(line, "]") != -1) break
+                        if (sscanf(line, " %f", &num) == 1) vec.append(num)
+                    }
+                    set(key, vec) // 'set' will automatically wrap it in a JVector
+                } else if (sf.substr(line, "\"") != -1) {
+                    sf.right(line, sf.substr(line, "\"") + 1)
+                    sf.head(line, "\"", valstr)
+                    set(key, valstr)
+                } else {
+                    if (sscanf(line, " %f", &num) == 1) set(key, num)
+                }
+            }
+        }
+        f.close()
+    }
+    
+    proc print_all() { local i
+        strdef obj_name
+        printf("\n--- JSON Object State ---\n")
+        for i=0, keys.count()-1 {
+            sprint(obj_name, "%s", values.o(i))
+            if (sf.substr(obj_name, "JNumber") != -1) {
+                printf("%s : %g\n", keys.o(i).s, values.o(i).v)
+            } else if (sf.substr(obj_name, "JString") != -1) {
+                printf("%s : \"%s\"\n", keys.o(i).s, values.o(i).s)
+            } else if (sf.substr(obj_name, "JVector") != -1) {
+                printf("%s : JVector[%d]\n", keys.o(i).s, values.o(i).v.size())
+            }
+        }
+        printf("-------------------------\n\n")
+    }
+endtemplate TJSON
