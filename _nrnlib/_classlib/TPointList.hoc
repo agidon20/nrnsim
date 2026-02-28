@@ -3,11 +3,10 @@ D__TPOINTLISTTHOC = 1
 // https://bbpteam.epfl.ch/wiki/index.php/NE:TPointList
 load_file("./_classlib/TString.hoc","D__TSTRINGHOC") // For TString class used in secname_() method
 
-
 begintemplate TPointList
 	public append,each_point,count,sclst,point,points,access_,mark,each_point_var
 	public setrand_distance
-	objref sclst,x,null,this,rnd,marklist,sl,NULL,sec_list
+	objref sclst,x,null,this,rnd,marklist,sl,NULL,sec_list, tags
 	strdef classname,tmp,style
 	public classname,loc,setrand,relocate,printf,total_l,x,mark1,filter_by_distance
 	public setrand_descrete, relocate_descrete,get_random_point,point,secname_,sec_list
@@ -31,52 +30,43 @@ begintemplate TPointList
      * 2. append(TPointList_Object)
      * 3. append("secname", x) or append("secname", x, "tag")
      */
-    obfunc append() { local j localobj sl
-        if (argtype(1) == 0) {
-            // Type 0 = Number (Standard append)
-            if (numarg() > 1) {
-                append_internal($1, $s2)
-            } else {
-                append_internal($1, "")
-            }
-            
-        }else {
-			if (argtype(1) == 1) {
-            // Type 1 = Object (Merge another TPointList)
-				sl = $o1.sclst
-				for j = 0, sl.count() - 1 {
-					// Shift context to the source section, then append
-					sl.o(j).sec append_internal($o1.x.x[j], $o1.tags.o(j).s) 
-				}
+    obfunc append() { local j localobj sl, tag
+		//first deal with the tag
+		tag = new TString("")
+		if(numarg()>1) {
+			if(argtype(2) == 1) tag = new TString($s2)
+			if(argtype(2) == 2) tag = new TString($o2)
+		}
+		
+		// Type 0 = Number (Standard append)
+        if (argtype(1) == 0) append_internal($1, tag)
+		// Type 1 = Object (Assume it's a TPointList to merge)
+		if (argtype(1) == 1) { 
+		// Type 1 = Object (Merge another TPointList)
+			sl = $o1.sclst
+			for j = 0, sl.count() - 1 {
+				// Shift context to the source section, then append
+				sl.o(j).sec append_internal($o1.x.x[j], $o1.tags.o(j)) 
 			}
 		}
-            
-        } else{
-			if (argtype(1) == 2) {
-            // Type 2 = String (Python-style string execution)
-            // Escaped quotes (\"%s\") allow us to pass the tag directly into the execute string
-				if (numarg() > 2) {
-					sprint(tmp, "%s { %s.append_internal(%g, \"%s\") }", $s1, this, $2, $s3)
-				} else {
-					sprint(tmp, "%s { %s.append_internal(%g, \"\") }", $s1, this, $2)
-				}
-				execute(tmp)
-			}
-        }
-        return this
+		return this
     }
 
     /**
      * Centralized Helper: Pushes the point, section reference, and tag into memory.
      * Assumes the correct section is currently accessed.
      */
-    proc append_internal() { localobj tstr
+    proc append_internal() { localobj sr
         x.append($1)
-        sclst.append(new SectionRef())
-        sec_list.append() 
+		sr = new SectionRef()
+        sclst.append(sr)
+        sr.sec sec_list.append() 
         // Initialize TString with the passed tag string
-        tstr = new TString($s2)
-        tags.append(tstr)
+        if(numarg() > 1){
+			tags.append(new TString($o2))
+		} else {
+			tags.append(new TString(""))
+		}
     }
 
     /**
@@ -314,8 +304,6 @@ begintemplate TPointList
 		x.x[$1] = $2
 	}*/
 	
-
-	
 	iterator each_point_var(){local i
 		for i=0, sclst.count-1{
 			if(sclst.o(i).exists) {
@@ -342,4 +330,3 @@ begintemplate TPointList
 		return s
 	}
 endtemplate TPointList
-
