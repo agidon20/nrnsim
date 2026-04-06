@@ -32,7 +32,8 @@ proc tpointlist_shape_mark(){local d, a localobj p
 }
 
 proc tpointlist_write_points(){
-	 printf("\n%s%s%s",tpointlist_function_string,tpointlist_tmp_string,"\treturn pl\n}")
+	printf("\n%s%s%s",tpointlist_function_string,tpointlist_tmp_string,"\treturn pl\n}")
+	tpointlist_shape_.exec_menu("select points")	
 }
 
 //just call tpointlist_generator() after loading your morphology

@@ -1,0 +1,30 @@
+
+// Global string used purely to test property extraction safely via execute1
+strdef _global_classname_check_
+
+/**
+ * Global Example Router. 
+ * Pass it any object (e.g., _example_(my_hist)) and it will automatically 
+ * detect the object's classname and run the corresponding example/test.
+ */
+proc _example_() { local has_classname localobj obj
+    obj = $o1
+    strdef cmd
+    
+    // 1. Safely test if the 'classname' property exists without crashing NEURON.
+    // execute1 evaluates at the global scope, so we test assigning it to our global string.
+    sprint(cmd, "_global_classname_check_ = %s.classname", obj)
+    has_classname = execute1(cmd)
+    
+    if (has_classname == 0) {
+        printf("\n[!] Cannot run example: The provided object does not have a 'classname' property.\n")
+        return
+    }
+    
+    // 2. Check the object's classname string property to route to the correct example
+    if (strcmp(obj.classname, "THist") == 0) {
+        _thist_example_()
+    } else {
+        printf("\n[!] No example function is currently registered for classname: %s\n", obj.classname)
+    }
+}
